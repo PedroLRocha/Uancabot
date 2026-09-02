@@ -1,0 +1,21 @@
+# ROS2 build artifacts (gerados, nao versionar)
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+
+# Python
+__pycache__/
+*.pyc
+
+# Arduino
+firmware/**/build/
+*.hex
+
+# macOS / editores
+.DS_Store
+.vscode/
+*.swp
+
+# Credenciais (nunca versionar!)
+**/config.h
+**/*secrets*
