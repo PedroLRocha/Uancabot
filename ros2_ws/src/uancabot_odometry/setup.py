@@ -14,13 +14,14 @@ setup(
     install_requires=['setuptools', 'pyserial'],
     zip_safe=True,
     maintainer='uancabot',
-    maintainer_email='uancabot@local',
+    maintainer_email='uancabot@example.com',
     description='UancaBot serial odometry node',
     license='MIT',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'uancabot_node = uancabot_odometry.uancabot_serial_node:main',
+            'path_executor = uancabot_odometry.path_executor_node:main',
         ],
     },
 )
