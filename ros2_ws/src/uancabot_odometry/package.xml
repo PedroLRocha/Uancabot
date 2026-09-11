@@ -4,7 +4,7 @@
   <name>uancabot_odometry</name>
   <version>0.1.0</version>
   <description>UancaBot serial bridge + odometry node (ROS2 Jazzy)</description>
-  <maintainer email="uancabot@local">UancaBot</maintainer>
+  <maintainer email="uancabot@example.com">UancaBot</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>
@@ -12,6 +12,7 @@
   <depend>nav_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>tf2</depend>
+  <depend>std_msgs</depend>
 
   <exec_depend>python3-serial</exec_depend>
 

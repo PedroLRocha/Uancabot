@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
 UancaBot Serial Odometry Node (ROS2 Jazzy)
-Lê encoders da serial do ESP32 (drive_uanca.ino) e publica /odom + /tf
+Lê encoders da serial do ESP32 e publica /odom + /tf.
+
+ATENCAO: o firmware atualmente gravado no ESP32 NAO e o
+firmware/drive_uanca/drive_uanca.ino deste repositorio -- e uma versao
+mais avancada (com calibracao de rota quadrada, giro de 90, etc) cujo
+codigo-fonte .ino foi perdido (so existe compilado na flash). O parser
+abaixo foi feito por engenharia reversa do que a serial realmente envia.
+Ver ENC,<enc1>,<enc2>,<timestamp_ms> em parse_enc_line().
 """
 
 import rclpy
@@ -12,6 +19,7 @@ import time
 import math
 import re
 
+from std_msgs.msg import String
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from tf2_ros import TransformBroadcaster
@@ -62,10 +70,29 @@ class UancabotSerialNode(Node):
         self.odom_pub = self.create_publisher(Odometry, '/odom', qos)
         self.tf_broadcaster = TransformBroadcaster(self)
 
+        # ───── Subscriber pra mandar comandos pro ESP32 (mesma porta serial) ─────
+        # Uso: ros2 topic pub --once /uancabot/raw_cmd std_msgs/String "data: 'f'"
+        # Aceita qualquer comando de 1 char que o firmware entenda: f, r, s,
+        # 1, 2, q, w, g, y, p, l (ver menu do firmware).
+        self.cmd_sub = self.create_subscription(
+            String, '/uancabot/raw_cmd', self.cmd_callback, 10
+        )
+
         # ───── Timer pra ler serial ─────
         self.create_timer(0.05, self.serial_callback)  # 20 Hz
 
         self.connect_serial()
+
+    def cmd_callback(self, msg):
+        """Escreve o comando recebido direto na serial do ESP32."""
+        if not self.serial or not self.serial.is_open:
+            self.get_logger().warn("[CMD] Serial nao conectada, comando descartado")
+            return
+        try:
+            self.serial.write(msg.data.encode('utf-8'))
+            self.get_logger().info(f"[CMD] Enviado ao ESP32: {msg.data!r}")
+        except Exception as e:
+            self.get_logger().warn(f"[CMD] Erro ao enviar: {e}")
 
     def connect_serial(self):
         try:
@@ -76,9 +103,21 @@ class UancabotSerialNode(Node):
             self.get_logger().error(f"[SERIAL] Falha ao conectar: {e}")
             self.serial = None
 
-    def parse_encoders(self, line):
-        # Espera linhas como "Encoder 1: 328" / "Encoder 2: 328"
-        match = re.search(r'Encoder\s+(\d+):\s+(-?\d+)', line)
+    def parse_enc_line(self, line):
+        """
+        Formato observado na serial (firmware atual, gravado por terceiros,
+        fonte .ino nao disponivel -- reconstruido por engenharia reversa
+        do output serial em 2026-09):
+
+            ENC,<enc1>,<enc2>,<timestamp_ms>
+
+        Essa linha vem ATOMICA (os dois encoders juntos, numa unica
+        mensagem), diferente do formato antigo "Encoder 1: X" / "Encoder 2: Y"
+        em duas linhas separadas -- que tinha risco de "pareamento errado"
+        entre um enc1 de um ciclo e um enc2 de outro. Preferir sempre esta
+        linha quando disponivel.
+        """
+        match = re.match(r'ENC,(-?\d+),(-?\d+),(-?\d+)', line)
         if match:
             return int(match.group(1)), int(match.group(2))
         return None
@@ -89,23 +128,27 @@ class UancabotSerialNode(Node):
             return
 
         try:
-            enc1_data = None
-            enc2_data = None
-
             while self.serial.in_waiting:
                 line = self.serial.readline().decode('utf-8', errors='ignore').strip()
-                if not line or line.startswith('---'):
+                if not line:
                     continue
-                parsed = self.parse_encoders(line)
-                if parsed:
-                    enc_num, enc_val = parsed
-                    if enc_num == 1:
-                        enc1_data = enc_val
-                    elif enc_num == 2:
-                        enc2_data = enc_val
 
-            if enc1_data is not None and enc2_data is not None:
-                self.update_odometry(enc1_data, enc2_data)
+                parsed = self.parse_enc_line(line)
+                if parsed is None:
+                    continue  # linha de menu/debug do firmware, ignora
+
+                enc1, enc2 = parsed
+
+                # O firmware retorna -1 quando o MD49 nao responde a tempo
+                # (timeout de leitura). Nunca integrar essa leitura na pose --
+                # um -1 isolado criaria um salto falso e permanente.
+                if enc1 == -1 or enc2 == -1:
+                    self.get_logger().warn(
+                        "[SERIAL] Leitura invalida (timeout do MD49), descartada"
+                    )
+                    continue
+
+                self.update_odometry(enc1, enc2)
 
         except Exception as e:
             self.get_logger().warn(f"[SERIAL] Erro na leitura: {e}")
