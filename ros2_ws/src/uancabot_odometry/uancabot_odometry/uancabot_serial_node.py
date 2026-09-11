@@ -33,7 +33,7 @@ class UancabotSerialNode(Node):
         self.declare_parameter('wheel_diameter', 0.125)   # 12.5 cm
         self.declare_parameter('wheelbase', 0.33)          # 33 cm
         self.declare_parameter('ticks_per_rev', 980.0)     # datasheet EMG49
-        self.declare_parameter('serial_port', '/dev/ttyACM0')
+        self.declare_parameter('serial_port', '/dev/ttyESP32')
         self.declare_parameter('serial_baud', 115200)
 
         self.wheel_diameter = self.get_parameter('wheel_diameter').value
@@ -96,7 +96,17 @@ class UancabotSerialNode(Node):
 
     def connect_serial(self):
         try:
-            self.serial = serial.Serial(self.serial_port, self.serial_baud, timeout=1.0)
+            # Abre a porta com DTR/RTS explicitamente baixos ANTES de conectar.
+            # O toggle padrao dessas linhas no open() e o que aciona o circuito
+            # de auto-reset do ESP32 -- por isso o ESP32 as vezes fica "mudo"
+            # depois de Ctrl+C + reconexao, exigindo reset fisico (EN/RST).
+            self.serial = serial.Serial()
+            self.serial.port = self.serial_port
+            self.serial.baudrate = self.serial_baud
+            self.serial.timeout = 1.0
+            self.serial.dtr = False
+            self.serial.rts = False
+            self.serial.open()
             self.get_logger().info(f"[SERIAL] Conectado em {self.serial_port}")
             time.sleep(1)
         except Exception as e:
