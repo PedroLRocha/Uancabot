@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 UancaBot Serial Odometry Node (ROS2 Jazzy)
-Lê encoders da serial do ESP32 e publica /odom + /tf.
+Lê encoders da serial do ESP32 e publica /odom + /tf + /actual_path.
 
 ATENCAO: o firmware atualmente gravado no ESP32 NAO e o
 firmware/drive_uanca/drive_uanca.ino deste repositorio -- e uma versao
@@ -20,8 +20,8 @@ import math
 import re
 
 from std_msgs.msg import String
-from geometry_msgs.msg import TransformStamped
-from nav_msgs.msg import Odometry
+from geometry_msgs.msg import TransformStamped, PoseStamped
+from nav_msgs.msg import Odometry, Path
 from tf2_ros import TransformBroadcaster
 
 
@@ -35,12 +35,16 @@ class UancabotSerialNode(Node):
         self.declare_parameter('ticks_per_rev', 980.0)     # datasheet EMG49
         self.declare_parameter('serial_port', '/dev/ttyESP32')
         self.declare_parameter('serial_baud', 115200)
+        self.declare_parameter('path_decimation_m', 0.02)  # so grava novo ponto no /actual_path a cada 2cm
+        self.declare_parameter('path_max_poses', 5000)     # limite de seguranca de memoria
 
         self.wheel_diameter = self.get_parameter('wheel_diameter').value
         self.wheelbase = self.get_parameter('wheelbase').value
         self.ticks_per_rev = self.get_parameter('ticks_per_rev').value
         self.serial_port = self.get_parameter('serial_port').value
         self.serial_baud = self.get_parameter('serial_baud').value
+        self.path_decimation_m = self.get_parameter('path_decimation_m').value
+        self.path_max_poses = self.get_parameter('path_max_poses').value
 
         self.distance_per_tick = (math.pi * self.wheel_diameter) / self.ticks_per_rev
 
@@ -49,6 +53,7 @@ class UancabotSerialNode(Node):
         self.get_logger().info(f"  Wheelbase:     {self.wheelbase:.4f} m")
         self.get_logger().info(f"  Ticks/rev:     {self.ticks_per_rev}")
         self.get_logger().info(f"  Dist/tick:     {self.distance_per_tick:.6f} m")
+        self.get_logger().info(f"  Decimacao path: {self.path_decimation_m} m")
 
         # ───── Serial ─────
         self.serial = None
@@ -61,6 +66,12 @@ class UancabotSerialNode(Node):
         self.y = 0.0
         self.theta = 0.0  # yaw em radianos
 
+        # ───── /actual_path (trajetoria realmente percorrida) ─────
+        self.actual_path_poses = []
+        self.last_path_x = None
+        self.last_path_y = None
+        self.path_capped_warned = False
+
         # ───── Publishers ─────
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -68,6 +79,7 @@ class UancabotSerialNode(Node):
             depth=10
         )
         self.odom_pub = self.create_publisher(Odometry, '/odom', qos)
+        self.actual_path_pub = self.create_publisher(Path, '/actual_path', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # ───── Subscriber pra mandar comandos pro ESP32 (mesma porta serial) ─────
@@ -188,6 +200,46 @@ class UancabotSerialNode(Node):
 
         self.publish_odom()
 
+    def update_actual_path(self, now, q_z, q_w):
+        """
+        Adiciona a pose atual ao /actual_path, com decimacao por distancia --
+        so grava um ponto novo se o robo se moveu pelo menos
+        path_decimation_m desde o ultimo ponto salvo. Evita um path lotado
+        de pontos redundantes enquanto o robo fica parado.
+        """
+        if self.last_path_x is not None:
+            moved = math.hypot(self.x - self.last_path_x, self.y - self.last_path_y)
+            if moved < self.path_decimation_m:
+                return  # nao andou o suficiente, nao grava ponto novo
+
+        if len(self.actual_path_poses) >= self.path_max_poses:
+            if not self.path_capped_warned:
+                self.get_logger().warn(
+                    f"[ACTUAL_PATH] Limite de {self.path_max_poses} poses atingido, "
+                    "path parou de crescer (reinicie o node pra zerar)."
+                )
+                self.path_capped_warned = True
+            return
+
+        pose = PoseStamped()
+        pose.header.stamp = now.to_msg()
+        pose.header.frame_id = "odom"
+        pose.pose.position.x = self.x
+        pose.pose.position.y = self.y
+        pose.pose.position.z = 0.0
+        pose.pose.orientation.z = q_z
+        pose.pose.orientation.w = q_w
+
+        self.actual_path_poses.append(pose)
+        self.last_path_x = self.x
+        self.last_path_y = self.y
+
+        path_msg = Path()
+        path_msg.header.stamp = now.to_msg()
+        path_msg.header.frame_id = "odom"
+        path_msg.poses = self.actual_path_poses
+        self.actual_path_pub.publish(path_msg)
+
     def publish_odom(self):
         now = self.get_clock().now()
 
@@ -227,6 +279,8 @@ class UancabotSerialNode(Node):
         tf_msg.transform.rotation.w = q_w
 
         self.tf_broadcaster.sendTransform(tf_msg)
+
+        self.update_actual_path(now, q_z, q_w)
 
         self.get_logger().info(
             f"Pose: x={self.x:.3f}m  y={self.y:.3f}m  theta={math.degrees(self.theta):.1f}deg",

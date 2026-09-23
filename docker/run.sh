@@ -28,6 +28,7 @@ docker run -it --rm \
   --name uancabot_ros2 \
   --device="$ESP32_DEV" \
   -p 8080:8080 \
+  -p 8765:8765 \
   -v "${PROJECT_DIR}/ros2_ws:/workspace/ros2_ws" \
   -w /workspace/ros2_ws \
   ros:jazzy-ros-base \
