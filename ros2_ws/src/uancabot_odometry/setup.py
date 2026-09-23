@@ -22,6 +22,7 @@ setup(
         'console_scripts': [
             'uancabot_node = uancabot_odometry.uancabot_serial_node:main',
             'path_executor = uancabot_odometry.path_executor_node:main',
+            'path_generator = uancabot_odometry.path_generator_node:main',
         ],
     },
 )
