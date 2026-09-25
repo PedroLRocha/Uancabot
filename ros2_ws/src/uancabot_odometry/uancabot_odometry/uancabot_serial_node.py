@@ -188,8 +188,8 @@ class UancabotSerialNode(Node):
         self.last_enc1 = enc1
         self.last_enc2 = enc2
 
-        dist_left = delta_enc1 * self.distance_per_tick
-        dist_right = delta_enc2 * self.distance_per_tick
+        dist_left = -delta_enc1 * self.distance_per_tick
+        dist_right = -delta_enc2 * self.distance_per_tick
 
         dist_center = (dist_left + dist_right) / 2.0
         delta_theta = (dist_right - dist_left) / self.wheelbase if self.wheelbase > 0 else 0.0

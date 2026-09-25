@@ -172,7 +172,7 @@ class PathExecutorNode(Node):
             if dist < self.distance_tolerance_m:
                 break  # ja esta em cima do alvo, nao precisa girar
 
-            target_heading = math.degrees(math.atan2(dy, dx))
+            target_heading = -math.degrees(math.atan2(dy, dx))
             err = angle_diff(target_heading, yaw)
 
             if abs(err) <= self.turn_tolerance_deg:
@@ -181,7 +181,7 @@ class PathExecutorNode(Node):
             # err > 0 -> precisa girar CCW ('p', giro puro no lugar)
             # err < 0 -> precisa girar CW ('2', pivota com deriva -- ok,
             #            o proximo recalculo de rumo absorve a deriva)
-            self.send_cmd('p' if err > 0 else '2')
+            self.send_cmd('2' if err > 0 else 'p')
             time.sleep(self.poll_interval_s)
 
         self.stop()

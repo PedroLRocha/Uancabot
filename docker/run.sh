@@ -1,35 +1,33 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────
-# Sobe um container Ubuntu 24.04 + ROS2 Jazzy com:
-#   - acesso ao ESP32 via /dev/ttyESP32 (symlink udev fixo, ver
-#     docker/README.md "Nome fixo da porta serial" -- nao usa
-#     /dev/ttyACM0 direto pq essa placa re-enumera a porta as vezes
-#     (ttyACM0 -> ttyACM1 -> ...) quando o ESP32 sofre reset via
-#     hardware, o que quebraria o mapeamento fixo do --device)
-#   - o workspace ROS2 montado como volume (edita fora, roda dentro)
-#   - modo interativo com terminal
+# Sobe o container UancaBot (imagem propria, com deps ja embutidas):
+#   - --privileged + -v /dev:/dev: o container enxerga /dev do HOST
+#     diretamente, sempre atualizado. Resolve o problema de o ESP32
+#     reenumerar (ttyACM0 -> ttyACM1) no meio da sessao e o container
+#     ficar "cego" pro dispositivo -- antes isso exigia recriar o
+#     container inteiro.
+#   - porta 8080 exposta (painel web antigo, se ainda usar)
+#   - porta 8765 exposta (foxglove_bridge)
+#   - workspace ROS2 montado como volume
 # ─────────────────────────────────────────────────────────────────
 set -e
 
-# Descobre o diretório do projeto (um nível acima de docker/)
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+IMAGE_NAME="uancabot:jazzy"
 
-ESP32_DEV="/dev/ttyESP32"
-
-# Verifica se o ESP32 está conectado
-if [ ! -e "$ESP32_DEV" ]; then
-  echo "[AVISO] $ESP32_DEV não encontrado."
-  echo "        Se o ESP32 estiver plugado, confira a regra udev:"
-  echo "        cat /etc/udev/rules.d/99-esp32-uancabot.rules"
-  echo "        Rodando mesmo assim (útil pra build sem hardware)."
+if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
+  echo "[ERRO] Imagem $IMAGE_NAME nao encontrada."
+  echo "       Construa primeiro com: ~/uancabot/docker/build.sh"
+  exit 1
 fi
 
 docker run -it --rm \
   --name uancabot_ros2 \
-  --device="$ESP32_DEV" \
+  --privileged \
+  -v /dev:/dev \
   -p 8080:8080 \
   -p 8765:8765 \
   -v "${PROJECT_DIR}/ros2_ws:/workspace/ros2_ws" \
   -w /workspace/ros2_ws \
-  ros:jazzy-ros-base \
+  "$IMAGE_NAME" \
   bash
