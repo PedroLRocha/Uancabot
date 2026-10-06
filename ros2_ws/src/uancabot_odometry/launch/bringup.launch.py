@@ -1,13 +1,13 @@
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import AnyLaunchDescriptionSource
-from launch_ros.substitutions import FindPackageShare
-from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
-    foxglove_bridge_launch = IncludeLaunchDescription(
+    foxglove_bridge = IncludeLaunchDescription(
         AnyLaunchDescriptionSource(
             PathJoinSubstitution([
                 FindPackageShare('foxglove_bridge'),
@@ -19,23 +19,29 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        foxglove_bridge_launch,
+        foxglove_bridge,
         Node(
             package='uancabot_odometry',
-            executable='uancabot_node',
-            name='uancabot_odometry_node',
+            executable='motor_bridge',
+            name='uancabot_motor_bridge',
             output='screen',
         ),
         Node(
             package='uancabot_odometry',
-            executable='path_executor',
-            name='uancabot_path_executor',
+            executable='path_follower',
+            name='uancabot_path_follower',
             output='screen',
         ),
         Node(
             package='uancabot_odometry',
             executable='path_generator',
             name='uancabot_path_generator',
+            output='screen',
+        ),
+        Node(
+            package='uancabot_odometry',
+            executable='route_ui',
+            name='uancabot_route_ui',
             output='screen',
         ),
     ])

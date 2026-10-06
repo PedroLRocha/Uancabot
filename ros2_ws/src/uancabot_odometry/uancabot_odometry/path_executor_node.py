@@ -4,16 +4,38 @@ UancaBot Path Executor Node (ROS2 Jazzy)
 
 Recebe uma lista de waypoints (x, y em metros, relativos a origem do /odom)
 e guia o robo ate cada um, em malha fechada, usando o /odom real como
-feedback -- nao usa tempo fixo, nao acumula erro como o comando 'g' do
-firmware (que e open-loop).
+feedback.
 
 Estrategia por waypoint ("turn-then-drive"):
   1. Calcula o rumo necessario (atan2) ate o alvo
   2. Gira ('p' = CCW puro, no lugar | '2' = CW, com deriva lateral --
      tudo bem, o proximo recalculo de rumo absorve qualquer deriva)
      ate o erro de rumo ficar dentro da tolerancia
-  3. Anda ('f') ate a distancia ate o alvo ficar dentro da tolerancia
+  3. Anda ('f') ate a DISTANCIA PERCORRIDA bater a distancia alvo --
+     IMPORTANTE: nao usa "distancia ATE o alvo" (ver nota abaixo)
   4. Passa pro proximo waypoint
+
+NOTA IMPORTANTE sobre a fase de avanco (2026-09, bug real encontrado e
+corrigido): a primeira versao desse node checava "distancia ATE o alvo"
+a cada leitura de /odom pra decidir quando parar. Isso parece certo, mas
+tem uma falha fatal com feedback infrequente (~1.4s por leitura, ritmo do
+firmware) e velocidade fixa do motor (sem controle de PWM continuo, so
+liga/desliga): o robo anda ~35-40cm entre duas leituras consecutivas.
+Se o alvo esta mais perto que isso, o robo PASSA por cima dele entre uma
+leitura e outra -- e como e uma linha reta, a distancia ATE o alvo so
+CRESCE depois que voce passa por cima, nunca mais volta a ficar pequena.
+Resultado observado em teste real: o robo passou reto por um alvo a
+0.25m e continuou andando por 4.9m antes do timeout de seguranca (20s)
+interromper. Precisou de STOP manual.
+
+Fix: em vez de checar distancia ATE o alvo (que so cresce depois que
+passa), checa DISTANCIA PERCORRIDA desde o inicio da perna (que so
+cresce enquanto anda, e sempre cruza o valor alvo em algum momento,
+garantindo que o loop sempre termina sozinho). Precisao ainda fica
+limitada pelo mesmo hardware (~35-40cm de "passo" entre leituras) --
+ainda assim, o loop agora SEMPRE para sozinho, nunca mais roda ate o
+timeout. Recomendado usar waypoints espacados generosamente (0.5m+)
+ate que o firmware suporte controle continuo de velocidade.
 
 Uso (via topico, mesmo padrao do raw_cmd):
   ros2 topic pub --once /uancabot/execute_path std_msgs/String \
@@ -37,7 +59,6 @@ from nav_msgs.msg import Odometry
 
 
 def angle_diff(target_deg, current_deg):
-    """Menor diferenca angular com sinal, em graus, no range (-180, 180]."""
     d = (target_deg - current_deg + 180.0) % 360.0 - 180.0
     return d
 
@@ -46,7 +67,6 @@ class PathExecutorNode(Node):
     def __init__(self):
         super().__init__('uancabot_path_executor')
 
-        # ───── Parametros (ajustaveis via ros2 param / launch) ─────
         self.declare_parameter('turn_tolerance_deg', 5.0)
         self.declare_parameter('distance_tolerance_m', 0.03)
         self.declare_parameter('poll_interval_s', 0.1)
@@ -57,19 +77,16 @@ class PathExecutorNode(Node):
         self.poll_interval_s = self.get_parameter('poll_interval_s').value
         self.waypoint_timeout_s = self.get_parameter('waypoint_timeout_s').value
 
-        # ───── Estado da pose atual (atualizado pelo /odom) ─────
         self.pose_lock = threading.Lock()
         self.current_x = 0.0
         self.current_y = 0.0
         self.current_yaw_deg = 0.0
         self.pose_received = False
 
-        # ───── Estado de execucao ─────
         self.abort_event = threading.Event()
         self.exec_thread = None
-        self.last_cmd_sent = None  # evita reenviar o mesmo comando toda hora
+        self.last_cmd_sent = None
 
-        # ───── QoS compativel com o publisher do uancabot_odometry_node ─────
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -96,8 +113,6 @@ class PathExecutorNode(Node):
             "Uso: ros2 topic pub --once /uancabot/execute_path std_msgs/String "
             "'data: \"[[1.0,0.0],[1.0,1.0]]\"'"
         )
-
-    # ───── Callbacks ─────
 
     def odom_callback(self, msg):
         qz = msg.pose.pose.orientation.z
@@ -138,14 +153,11 @@ class PathExecutorNode(Node):
         )
         self.exec_thread.start()
 
-    # ───── Helpers de baixo nivel ─────
-
     def get_pose(self):
         with self.pose_lock:
             return self.current_x, self.current_y, self.current_yaw_deg
 
     def send_cmd(self, char):
-        """So publica se for diferente do ultimo comando (evita spam na serial)."""
         if char != self.last_cmd_sent:
             self.cmd_pub.publish(String(data=char))
             self.last_cmd_sent = char
@@ -153,13 +165,9 @@ class PathExecutorNode(Node):
     def stop(self):
         self.send_cmd('s')
 
-    # ───── Logica de controle ─────
-
     def goto_point(self, target_x, target_y):
-        """Gira ate alinhar o rumo, depois anda ate o ponto. Malha fechada."""
         wp_start = time.time()
 
-        # ── Fase 1: girar ──
         while rclpy.ok() and not self.abort_event.is_set():
             if time.time() - wp_start > self.waypoint_timeout_s:
                 self.get_logger().warn("[PATH] Timeout na fase de giro, abortando waypoint")
@@ -170,7 +178,7 @@ class PathExecutorNode(Node):
             dx, dy = target_x - x, target_y - y
             dist = math.hypot(dx, dy)
             if dist < self.distance_tolerance_m:
-                break  # ja esta em cima do alvo, nao precisa girar
+                break
 
             target_heading = -math.degrees(math.atan2(dy, dx))
             err = angle_diff(target_heading, yaw)
@@ -178,19 +186,18 @@ class PathExecutorNode(Node):
             if abs(err) <= self.turn_tolerance_deg:
                 break
 
-            # err > 0 -> precisa girar CCW ('p', giro puro no lugar)
-            # err < 0 -> precisa girar CW ('2', pivota com deriva -- ok,
-            #            o proximo recalculo de rumo absorve a deriva)
             self.send_cmd('2' if err > 0 else 'p')
             time.sleep(self.poll_interval_s)
 
         self.stop()
-        time.sleep(0.3)  # deixa o "coast" (inercia) assentar antes de medir de novo
+        time.sleep(0.3)
 
         if self.abort_event.is_set():
             return False
 
-        # ── Fase 2: andar ──
+        x0, y0, _ = self.get_pose()
+        target_dist = math.hypot(target_x - x0, target_y - y0)
+
         wp_start = time.time()
         while rclpy.ok() and not self.abort_event.is_set():
             if time.time() - wp_start > self.waypoint_timeout_s:
@@ -199,9 +206,9 @@ class PathExecutorNode(Node):
                 return False
 
             x, y, yaw = self.get_pose()
-            dist = math.hypot(target_x - x, target_y - y)
+            traveled = math.hypot(x - x0, y - y0)
 
-            if dist <= self.distance_tolerance_m:
+            if traveled >= target_dist - self.distance_tolerance_m:
                 break
 
             self.send_cmd('f')
@@ -231,7 +238,7 @@ class PathExecutorNode(Node):
                 break
 
         self.stop()
-        self.last_cmd_sent = None  # permite reenviar 's' numa proxima chamada se preciso
+        self.last_cmd_sent = None
 
         if self.abort_event.is_set():
             self.get_logger().warn("[PATH] Trajetoria abortada.")

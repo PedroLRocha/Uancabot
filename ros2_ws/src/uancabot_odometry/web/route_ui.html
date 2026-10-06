@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Rotas do UancaBot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@500;600;700&display=swap">
+<style>
+  :root {
+    --film: #DCE3E8;
+    --grid-minor: #C9D3DA;
+    --grid-major: #8FA0AC;
+    --ink: #1D2A38;
+    --ink-soft: #4A5968;
+    --ink-faint: #7C8A97;
+    --cobalt: #2B59C3;
+    --cobalt-soft: rgba(43, 89, 195, 0.14);
+    --graphite: #3A3F45;
+    --paper: #FBFCFC;
+    --line: #D7DEE3;
+    --stop: #C8261E;
+    --stop-dark: #8E1A14;
+    --caution: #F2C230;
+    --ok: #2F8A57;
+    --warn: #B4610F;
+    --radius: 6px;
+    --ui: 'Barlow', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --num: 'Barlow Condensed', 'Barlow', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: var(--ui);
+    font-size: 15px;
+    line-height: 1.4;
+    color: var(--ink);
+    background: var(--paper);
+    font-variant-numeric: tabular-nums;
+  }
+  button, input, select { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--cobalt); outline-offset: 2px; }
+
+  .app { display: grid; grid-template-columns: 1fr 370px; height: 100dvh; }
+
+  /* ───────── mapa ───────── */
+  .map { position: relative; background: var(--film); overflow: hidden; touch-action: none; }
+  canvas { display: block; width: 100%; height: 100%; }
+  .map.drawing canvas { cursor: crosshair; }
+
+  .readout {
+    position: absolute; top: 12px; left: 12px;
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 12px;
+    background: rgba(251, 252, 252, 0.92);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    font-size: 14px;
+  }
+  .conn { display: flex; align-items: center; gap: 7px; font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--ink-faint); }
+  .conn.live .dot { background: var(--ok); }
+  .conn.lost .dot { background: var(--stop); }
+  .pose { font-family: var(--num); font-size: 16px; color: var(--ink-soft); }
+  .pose b { color: var(--ink); font-weight: 600; }
+
+  .map-tools { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 6px; }
+  .map-tools button {
+    padding: 7px 11px; background: rgba(251, 252, 252, 0.92);
+    border: 1px solid var(--line); border-radius: var(--radius); font-size: 14px;
+  }
+  .map-tools button:hover { border-color: var(--grid-major); }
+  .scale { position: absolute; left: 12px; bottom: 54px; font-family: var(--num); font-size: 14px; color: var(--ink-soft); }
+  .scale i { display: block; height: 6px; border: 2px solid var(--ink-soft); border-top: 0; margin-top: 2px; }
+
+  /* botao de emergencia */
+  .estop {
+    position: absolute; right: 18px; bottom: 18px;
+    width: 112px; height: 112px; border-radius: 50%;
+    border: none; padding: 0;
+    background:
+      repeating-linear-gradient(45deg, var(--caution) 0 9px, var(--ink) 9px 18px);
+    box-shadow: 0 3px 10px rgba(29, 42, 56, 0.35);
+    display: grid; place-items: center;
+  }
+  .estop span {
+    width: 82px; height: 82px; border-radius: 50%;
+    background: radial-gradient(circle at 38% 32%, #E5483F 0%, var(--stop) 45%, var(--stop-dark) 100%);
+    box-shadow: inset 0 -5px 0 rgba(0, 0, 0, 0.25), 0 2px 0 var(--caution), 0 0 0 5px var(--caution);
+    display: grid; place-items: center;
+    color: #fff; font-family: var(--num); font-weight: 700; font-size: 21px; letter-spacing: 0.06em;
+    transition: transform 0.08s;
+  }
+  .estop:active span { transform: scale(0.94); }
+  .estop:focus-visible { outline: 3px solid var(--ink); outline-offset: 4px; }
+
+  .estop-banner {
+    position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+    display: none; align-items: center; gap: 14px;
+    padding: 10px 12px 10px 16px;
+    background: var(--stop); color: #fff; border-radius: var(--radius);
+    box-shadow: 0 3px 10px rgba(29, 42, 56, 0.3); font-weight: 600;
+  }
+  .estop-banner.on { display: flex; }
+  .estop-banner button {
+    background: #fff; color: var(--stop-dark); border: none; border-radius: 4px;
+    padding: 6px 12px; font-weight: 700;
+  }
+
+  /* ───────── painel ───────── */
+  .panel {
+    display: flex; flex-direction: column; min-height: 0;
+    border-left: 1px solid var(--line); background: var(--paper);
+  }
+  .panel header { padding: 16px 18px 10px; }
+  .panel h1 { margin: 0; font-family: var(--num); font-weight: 700; font-size: 26px; line-height: 1.1; }
+  .status { margin-top: 4px; font-size: 14px; color: var(--ink-soft); min-height: 20px; }
+  .status.running { color: var(--cobalt); font-weight: 600; }
+  .status.done { color: var(--ok); font-weight: 600; }
+  .status.aborted { color: var(--warn); font-weight: 600; }
+
+  .tabs { display: grid; grid-template-columns: repeat(4, auto); justify-content: space-between; margin: 6px 18px 0; border-bottom: 1px solid var(--line); }
+  .tabs button {
+    background: none; border: none; padding: 9px 4px 10px; font-weight: 600; font-size: 14.5px; white-space: nowrap;
+    color: var(--ink-faint); border-bottom: 3px solid transparent; margin-bottom: -1px;
+  }
+  .tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--cobalt); }
+
+  .body { flex: 1; overflow-y: auto; padding: 16px 18px; min-height: 0; }
+  .pane[hidden] { display: none; }
+  .hint { margin: 0 0 14px; color: var(--ink-soft); font-size: 14px; }
+
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .field { display: grid; gap: 4px; margin-bottom: 12px; }
+  .field label { font-size: 13.5px; color: var(--ink-soft); font-weight: 500; }
+  .unit { position: relative; }
+  .unit input { width: 100%; padding: 8px 34px 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+  .unit em { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-style: normal; color: var(--ink-faint); font-size: 14px; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  .check { display: flex; align-items: center; gap: 9px; padding: 6px 0; font-size: 14.5px; }
+  .check input { width: 17px; height: 17px; accent-color: var(--cobalt); }
+
+  .btn {
+    border: 1px solid var(--line); background: #fff; border-radius: var(--radius);
+    padding: 8px 12px; font-weight: 600; font-size: 14px;
+  }
+  .btn:hover { border-color: var(--grid-major); }
+  .btn.small { padding: 5px 9px; font-size: 13.5px; }
+  .btn:disabled { opacity: 0.45; cursor: default; }
+
+  .seg { display: inline-grid; grid-auto-flow: column; border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .seg button { border: none; background: #fff; padding: 7px 12px; font-weight: 600; font-size: 14px; color: var(--ink-soft); }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+
+  /* lista de passos */
+  .steps { list-style: none; margin: 0 0 12px; padding: 0; counter-reset: step; }
+  .step {
+    display: grid; grid-template-columns: 20px 1fr auto; gap: 6px; align-items: center;
+    padding: 8px 0; border-bottom: 1px solid var(--line);
+  }
+  .step::before { counter-increment: step; content: counter(step); font-family: var(--num); font-weight: 600; color: var(--ink-faint); font-size: 16px; text-align: center; }
+  .step .inputs { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; min-width: 0; }
+  .step select { padding: 6px 4px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; max-width: 146px; }
+  .step .unit { width: 74px; }
+  .step .unit input { padding: 6px 30px 6px 8px; }
+  .step .acts { display: flex; gap: 0; }
+  .icon { width: 24px; height: 28px; border: none; background: none; border-radius: 4px; color: var(--ink-faint); font-size: 16px; line-height: 1; }
+  .icon:hover { background: var(--film); color: var(--ink); }
+  .icon:disabled { opacity: 0.3; cursor: default; background: none; }
+  .empty { padding: 14px; border: 1px dashed var(--grid-major); border-radius: var(--radius); color: var(--ink-soft); font-size: 14px; margin-bottom: 12px; }
+
+  .shapes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 14px; }
+  .shapes button {
+    display: grid; justify-items: center; gap: 4px; padding: 8px 2px 7px;
+    border: 1px solid var(--line); border-radius: var(--radius); background: #fff; font-size: 13px; font-weight: 600; color: var(--ink-soft);
+  }
+  .shapes button svg { width: 34px; height: 26px; stroke: currentColor; fill: none; stroke-width: 2; }
+  .shapes button[aria-pressed="true"] { border-color: var(--cobalt); color: var(--cobalt); background: var(--cobalt-soft); }
+
+  .saved { list-style: none; margin: 0 0 12px; padding: 0; }
+  .saved li { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .saved .name { font-weight: 600; }
+  .saved .meta { font-size: 13px; color: var(--ink-faint); }
+
+  .points { font-family: var(--num); font-size: 15px; color: var(--ink-soft); margin: 2px 0 12px; }
+
+  /* rodape de acoes */
+  .actions { border-top: 1px solid var(--line); padding: 12px 18px 16px; display: grid; gap: 10px; background: var(--paper); }
+  .summary { display: flex; gap: 18px; font-size: 14px; color: var(--ink-soft); }
+  .summary b { font-family: var(--num); font-size: 19px; color: var(--ink); font-weight: 600; }
+  .go { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; }
+  .primary { background: var(--cobalt); color: #fff; border: none; border-radius: var(--radius); padding: 11px; font-weight: 700; font-size: 15.5px; }
+  .primary:hover { background: #224AA6; }
+  .primary:disabled { background: var(--ink-faint); cursor: default; }
+  .abort { background: #fff; color: var(--warn); border: 1px solid var(--warn); border-radius: var(--radius); padding: 10px; font-weight: 700; }
+  .abort:disabled { opacity: 0.4; cursor: default; }
+  .msg { font-size: 14px; min-height: 19px; color: var(--ink-soft); }
+  .msg.err { color: var(--stop); font-weight: 600; }
+
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: 52dvh 1fr; }
+    .panel { border-left: none; border-top: 1px solid var(--line); }
+    .estop { width: 92px; height: 92px; right: 12px; bottom: 12px; }
+    .estop span { width: 66px; height: 66px; font-size: 17px; }
+    .pose { display: none; }
+    .map-tools { flex-direction: column; align-items: flex-start; }
+    .scale { bottom: 100px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <main class="map" id="map">
+    <canvas id="cv" aria-label="Mapa do robô e da rota"></canvas>
+
+    <div class="readout">
+      <div class="conn" id="conn"><span class="dot"></span><span id="connText">Conectando…</span></div>
+      <div class="pose" id="pose">x <b>0,00</b> m &nbsp; y <b>0,00</b> m &nbsp; θ <b>0</b>°</div>
+    </div>
+
+    <div class="estop-banner" id="estopBanner" role="alert">
+      Parada de emergência ativa
+      <button type="button" id="releaseBtn">Liberar</button>
+    </div>
+
+    <div class="scale" id="scale"><span id="scaleText">1 m</span><i id="scaleBar" style="width:100px"></i></div>
+    <div class="map-tools">
+      <button type="button" id="centerBtn">Centralizar no robô</button>
+      <button type="button" id="resetBtn">Zerar odometria</button>
+    </div>
+
+    <button type="button" class="estop" id="estopBtn" aria-label="Parada de emergência (barra de espaço)"><span>PARAR</span></button>
+  </main>
+
+  <aside class="panel">
+    <header>
+      <h1>Rotas do UancaBot</h1>
+      <div class="status" id="status">Robô parado</div>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="draw" aria-selected="true">Desenhar</button>
+      <button role="tab" data-tab="steps" aria-selected="false">Por distância</button>
+      <button role="tab" data-tab="shape" aria-selected="false">Formas</button>
+      <button role="tab" data-tab="saved" aria-selected="false">Salvas</button>
+    </nav>
+
+    <div class="body">
+      <!-- Desenhar -->
+      <section class="pane" data-pane="draw">
+        <p class="hint">Clique no mapa para marcar pontos. A rota começa onde o robô está. Arraste um ponto para movê-lo; toque nele sem arrastar para apagá-lo.</p>
+        <div class="points" id="drawInfo">Nenhum ponto marcado</div>
+        <label class="check"><input type="checkbox" id="drawSmooth"> Curvas suaves (sem paradas nos cantos)</label>
+        <label class="check"><input type="checkbox" id="drawClosed"> Voltar ao ponto de partida</label>
+        <label class="check"><input type="checkbox" id="drawSnap" checked> Encaixar na grade de 10 cm</label>
+        <div class="row" style="margin-top:10px">
+          <button type="button" class="btn" id="drawUndo">Desfazer ponto</button>
+          <button type="button" class="btn" id="drawClear">Apagar desenho</button>
+        </div>
+      </section>
+
+      <!-- Por distancia -->
+      <section class="pane" data-pane="steps" hidden>
+        <p class="hint">Monte a rota como instruções: andar tantos metros, virar tantos graus. O robô começa olhando para a frente.</p>
+        <ol class="steps" id="stepList"></ol>
+        <div class="empty" id="stepEmpty">Adicione o primeiro passo abaixo.</div>
+        <div class="row" style="margin-bottom:14px">
+          <button type="button" class="btn small" data-add="forward">+ Andar</button>
+          <button type="button" class="btn small" data-add="left">+ Virar à esquerda</button>
+          <button type="button" class="btn small" data-add="right">+ Virar à direita</button>
+          <button type="button" class="btn small" data-add="arc">+ Curva</button>
+        </div>
+        <div class="field">
+          <label for="turnRadius">Raio das viradas (0 = gira no lugar, cantos exatos)</label>
+          <div class="unit"><input type="number" id="turnRadius" min="0" step="0.05" value="0"><em>m</em></div>
+        </div>
+      </section>
+
+      <!-- Formas -->
+      <section class="pane" data-pane="shape" hidden>
+        <div class="shapes" id="shapeGrid"></div>
+        <div id="shapeFields"></div>
+      </section>
+
+      <!-- Salvas -->
+      <section class="pane" data-pane="saved" hidden>
+        <p class="hint">Rotas guardadas neste navegador. Rotas desenhadas são salvas em relação à posição do robô, e ao carregar acompanham onde ele estiver.</p>
+        <div class="row" style="margin-bottom:12px">
+          <input id="saveName" placeholder="Nome da rota" style="flex:1;min-width:140px;padding:8px 10px;border:1px solid var(--line);border-radius:6px">
+          <button type="button" class="btn" id="saveBtn">Salvar rota atual</button>
+        </div>
+        <ul class="saved" id="savedList"></ul>
+        <div class="row">
+          <button type="button" class="btn small" id="exportBtn">Exportar arquivo</button>
+          <label class="btn small" style="display:inline-block">Importar arquivo<input type="file" id="importFile" accept=".json" hidden></label>
+        </div>
+      </section>
+    </div>
+
+    <div class="actions">
+      <div class="summary"><span>Comprimento <b id="sumLen">–</b></span><span>Tempo estimado <b id="sumTime">–</b></span></div>
+      <div class="go">
+        <button type="button" class="abort" id="abortBtn">Cancelar rota</button>
+        <button type="button" class="primary" id="execBtn">Executar rota</button>
+      </div>
+      <div class="msg" id="msg" role="status"></div>
+    </div>
+  </aside>
+</div>
+
+<script>
+'use strict';
+
+// ───────── estado ─────────
+const S = {
+  tab: 'draw',
+  robot: null,            // {x, y, th}
+  odomAge: null,
+  actual: [], planned: [], lookahead: null,
+  status: 'idle', estop: false,
+  draw: { pts: [], smooth: false, closed: false, snap: true },
+  steps: [{ type: 'forward', d: 1.0 }],
+  shape: { kind: 'square', side_m: 1.0, width_m: 1.2, height_m: 0.6, radius_m: 0.5, length_m: 1.0,
+           angle_deg: 90, corner_radius_m: 0, direction: 'left', amplitude_m: 0.25, wavelength_m: 1.0 },
+  preview: [],            // rota da previa (frame odom)
+  view: { cx: 0, cy: 0, scale: 140, fitted: false },
+};
+const V_EST = 0.11;       // velocidade media pra estimativa de tempo (m/s)
+
+const $ = (id) => document.getElementById(id);
+const fmt = (v, d = 2) => v.toFixed(d).replace('.', ',');
+
+// ───────── API ─────────
+async function api(path, body) {
+  const r = await fetch(path, {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || data.ok === false) throw new Error(data.error || `erro ${r.status}`);
+  return data;
+}
+
+function say(text, isErr = false) {
+  const m = $('msg');
+  m.textContent = text;
+  m.className = 'msg' + (isErr ? ' err' : '');
+}
+
+// ───────── montagem da requisicao da rota atual ─────────
+function routeRequest() {
+  if (S.tab === 'draw') {
+    if (!S.draw.pts.length) return null;
+    return { mode: 'draw', points: S.draw.pts, smooth: S.draw.smooth, closed: S.draw.closed };
+  }
+  if (S.tab === 'steps') {
+    if (!S.steps.length) return null;
+    const segs = [];
+    for (const s of S.steps) {
+      if (s.type === 'forward') segs.push({ forward: +s.d });
+      else if (s.type === 'left') segs.push({ turn: +s.a });
+      else if (s.type === 'right') segs.push({ turn: -s.a });
+      else if (s.type === 'arc') segs.push({ arc: [+s.r, s.dir === 'right' ? -s.a : +s.a] });
+    }
+    return { mode: 'shape', spec: { shape: 'segments', segments: segs, turn_radius_m: +$('turnRadius').value || 0 } };
+  }
+  if (S.tab === 'shape') return { mode: 'shape', spec: shapeSpec() };
+  return null;
+}
+
+function shapeSpec() {
+  const s = S.shape;
+  switch (s.kind) {
+    case 'line': return { shape: 'line', length_m: +s.length_m };
+    case 'arc': return { shape: 'arc', radius_m: +s.radius_m, angle_deg: (s.direction === 'right' ? -1 : 1) * s.angle_deg };
+    case 'circle': return { shape: 'circle', radius_m: +s.radius_m, direction: s.direction };
+    case 'square': return { shape: 'square', side_m: +s.side_m, corner_radius_m: +s.corner_radius_m, direction: s.direction };
+    case 'rectangle': return { shape: 'rectangle', width_m: +s.width_m, height_m: +s.height_m, corner_radius_m: +s.corner_radius_m, direction: s.direction };
+    case 'figure8': return { shape: 'figure8', radius_m: +s.radius_m };
+    case 'slalom': return { shape: 'slalom', length_m: +s.length_m, amplitude_m: +s.amplitude_m, wavelength_m: +s.wavelength_m };
+  }
+}
+
+// previa com debounce
+let previewTimer = null, previewSeq = 0;
+function schedulePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(runPreview, 220);
+}
+async function runPreview() {
+  const req = routeRequest();
+  const seq = ++previewSeq;
+  if (!req) { S.preview = []; updateSummary(null); draw(); return; }
+  try {
+    const out = await api('/api/preview', req);
+    if (seq !== previewSeq) return;
+    S.preview = out.points;
+    updateSummary(out.length);
+    say('');
+  } catch (e) {
+    if (seq !== previewSeq) return;
+    S.preview = [];
+    updateSummary(null);
+    say(e.message, true);
+  }
+  draw();
+}
+function updateSummary(len) {
+  $('sumLen').textContent = len == null ? '–' : `${fmt(len)} m`;
+  if (len == null) { $('sumTime').textContent = '–'; return; }
+  const sec = Math.round(len / V_EST + 2);
+  $('sumTime').textContent = sec < 60 ? `${sec} s` : `${Math.floor(sec / 60)} min ${sec % 60} s`;
+}
+
+// ───────── abas ─────────
+document.querySelectorAll('.tabs button').forEach((b) => {
+  b.addEventListener('click', () => setTab(b.dataset.tab));
+});
+function setTab(tab) {
+  S.tab = tab;
+  document.querySelectorAll('.tabs button').forEach((b) => b.setAttribute('aria-selected', b.dataset.tab === tab));
+  document.querySelectorAll('.pane').forEach((p) => { p.hidden = p.dataset.pane !== tab; });
+  $('map').classList.toggle('drawing', tab === 'draw');
+  $('execBtn').disabled = tab === 'saved';
+  schedulePreview();
+}
+
+// ───────── desenho ─────────
+function updateDrawInfo() {
+  const n = S.draw.pts.length;
+  $('drawInfo').textContent = n ? `${n} ${n === 1 ? 'ponto marcado' : 'pontos marcados'}` : 'Nenhum ponto marcado';
+}
+$('drawSmooth').addEventListener('change', (e) => { S.draw.smooth = e.target.checked; schedulePreview(); });
+$('drawClosed').addEventListener('change', (e) => { S.draw.closed = e.target.checked; schedulePreview(); });
+$('drawSnap').addEventListener('change', (e) => { S.draw.snap = e.target.checked; });
+$('drawUndo').addEventListener('click', () => { S.draw.pts.pop(); updateDrawInfo(); schedulePreview(); draw(); });
+$('drawClear').addEventListener('click', () => { S.draw.pts = []; updateDrawInfo(); schedulePreview(); draw(); });
+
+// ───────── passos por distancia ─────────
+const STEP_LABEL = { forward: 'Andar', left: 'Virar à esquerda', right: 'Virar à direita', arc: 'Curva' };
+function unitInput(value, unit, step, onInput, min = 0) {
+  const w = document.createElement('div');
+  w.className = 'unit';
+  const i = document.createElement('input');
+  i.type = 'number'; i.step = step; i.min = min; i.value = value;
+  i.addEventListener('input', () => onInput(i.value));
+  const e = document.createElement('em'); e.textContent = unit;
+  w.append(i, e);
+  return w;
+}
+function renderSteps() {
+  const ol = $('stepList');
+  ol.innerHTML = '';
+  $('stepEmpty').hidden = S.steps.length > 0;
+  S.steps.forEach((s, idx) => {
+    const li = document.createElement('li');
+    li.className = 'step';
+    const box = document.createElement('div');
+    box.className = 'inputs';
+    const sel = document.createElement('select');
+    for (const k of Object.keys(STEP_LABEL)) {
+      const o = document.createElement('option'); o.value = k; o.textContent = STEP_LABEL[k];
+      if (k === s.type) o.selected = true;
+      sel.append(o);
+    }
+    sel.addEventListener('change', () => {
+      s.type = sel.value;
+      if (s.type === 'forward' && s.d == null) s.d = 0.5;
+      if (s.type !== 'forward' && s.a == null) s.a = 90;
+      if (s.type === 'arc') { s.r = s.r ?? 0.3; s.dir = s.dir ?? 'left'; }
+      renderSteps(); schedulePreview();
+    });
+    box.append(sel);
+    const upd = (k) => (v) => { s[k] = v; schedulePreview(); };
+    if (s.type === 'forward') box.append(unitInput(s.d, 'm', 0.05, upd('d')));
+    else if (s.type === 'left' || s.type === 'right') box.append(unitInput(s.a, '°', 5, upd('a')));
+    else {
+      const dir = document.createElement('select');
+      [['left', 'à esquerda'], ['right', 'à direita']].forEach(([v, t]) => {
+        const o = document.createElement('option'); o.value = v; o.textContent = t; if (v === s.dir) o.selected = true; dir.append(o);
+      });
+      dir.addEventListener('change', () => { s.dir = dir.value; schedulePreview(); });
+      box.append(dir, unitInput(s.a, '°', 5, upd('a')), unitInput(s.r, 'm', 0.05, upd('r')));
+      box.lastChild.title = 'Raio da curva';
+    }
+    const acts = document.createElement('div');
+    acts.className = 'acts';
+    const mk = (txt, title, fn, dis) => {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'icon'; b.textContent = txt;
+      b.title = title; b.setAttribute('aria-label', title); b.disabled = dis; b.addEventListener('click', fn); return b;
+    };
+    acts.append(
+      mk('↑', 'Mover para cima', () => { [S.steps[idx - 1], S.steps[idx]] = [S.steps[idx], S.steps[idx - 1]]; renderSteps(); schedulePreview(); }, idx === 0),
+      mk('↓', 'Mover para baixo', () => { [S.steps[idx + 1], S.steps[idx]] = [S.steps[idx], S.steps[idx + 1]]; renderSteps(); schedulePreview(); }, idx === S.steps.length - 1),
+      mk('✕', 'Remover passo', () => { S.steps.splice(idx, 1); renderSteps(); schedulePreview(); }, false),
+    );
+    li.append(box, acts);
+    ol.append(li);
+  });
+}
+document.querySelectorAll('[data-add]').forEach((b) => b.addEventListener('click', () => {
+  const t = b.dataset.add;
+  S.steps.push(t === 'forward' ? { type: t, d: 0.5 } : t === 'arc' ? { type: t, a: 90, r: 0.3, dir: 'left' } : { type: t, a: 90 });
+  renderSteps(); schedulePreview();
+}));
+$('turnRadius').addEventListener('input', schedulePreview);
+
+// ───────── formas ─────────
+const SHAPES = [
+  ['line', 'Reta', '<path d="M4 13H30"/>'],
+  ['arc', 'Arco', '<path d="M5 22A14 14 0 0 1 29 22"/>'],
+  ['circle', 'Círculo', '<circle cx="17" cy="13" r="10"/>'],
+  ['square', 'Quadrado', '<rect x="8" y="4" width="18" height="18"/>'],
+  ['rectangle', 'Retângulo', '<rect x="3" y="7" width="28" height="13"/>'],
+  ['figure8', 'Oito', '<circle cx="10" cy="13" r="7"/><circle cx="24" cy="13" r="7"/>'],
+  ['slalom', 'Zigue-zague', '<path d="M2 13C7 2 10 2 13 13S20 24 24 13 31 2 32 8"/>'],
+];
+const FIELDS = {
+  line: [['length_m', 'Comprimento', 'm']],
+  arc: [['radius_m', 'Raio', 'm'], ['angle_deg', 'Ângulo', '°'], 'direction'],
+  circle: [['radius_m', 'Raio', 'm'], 'direction'],
+  square: [['side_m', 'Lado', 'm'], ['corner_radius_m', 'Arredondar cantos (0 = cantos exatos)', 'm'], 'direction'],
+  rectangle: [['width_m', 'Largura (para a frente)', 'm'], ['height_m', 'Altura (para o lado)', 'm'],
+              ['corner_radius_m', 'Arredondar cantos (0 = cantos exatos)', 'm'], 'direction'],
+  figure8: [['radius_m', 'Raio de cada laço', 'm']],
+  slalom: [['length_m', 'Comprimento', 'm'], ['amplitude_m', 'Amplitude (para cada lado)', 'm'], ['wavelength_m', 'Distância entre ondas', 'm']],
+};
+function renderShapes() {
+  const g = $('shapeGrid');
+  g.innerHTML = '';
+  for (const [k, label, svg] of SHAPES) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('aria-pressed', S.shape.kind === k);
+    b.innerHTML = `<svg viewBox="0 0 34 26" aria-hidden="true">${svg}</svg>${label}`;
+    b.addEventListener('click', () => { S.shape.kind = k; renderShapes(); schedulePreview(); });
+    g.append(b);
+  }
+  const f = $('shapeFields');
+  f.innerHTML = '';
+  for (const spec of FIELDS[S.shape.kind]) {
+    if (spec === 'direction') {
+      const d = document.createElement('div');
+      d.className = 'field';
+      d.innerHTML = '<label>Sentido</label>';
+      const seg = document.createElement('div');
+      seg.className = 'seg';
+      [['left', 'Para a esquerda'], ['right', 'Para a direita']].forEach(([v, t]) => {
+        const b = document.createElement('button'); b.type = 'button'; b.textContent = t;
+        b.setAttribute('aria-pressed', S.shape.direction === v);
+        b.addEventListener('click', () => { S.shape.direction = v; renderShapes(); schedulePreview(); });
+        seg.append(b);
+      });
+      d.append(seg);
+      f.append(d);
+      continue;
+    }
+    const [key, label, unit] = spec;
+    const d = document.createElement('div');
+    d.className = 'field';
+    const l = document.createElement('label'); l.textContent = label;
+    d.append(l, unitInput(S.shape[key], unit, unit === '°' ? 5 : 0.05, (v) => { S.shape[key] = v; schedulePreview(); }));
+    f.append(d);
+  }
+}
+
+// ───────── rotas salvas ─────────
+const STORE = 'uancabot.rotas.v1';
+function loadSaved() { try { return JSON.parse(localStorage.getItem(STORE)) || []; } catch { return []; } }
+function storeSaved(list) { try { localStorage.setItem(STORE, JSON.stringify(list)); } catch { say('Não foi possível salvar neste navegador', true); } }
+function toLocal(pts, r) {
+  const c = Math.cos(r.th), s = Math.sin(r.th);
+  return pts.map(([x, y]) => { const dx = x - r.x, dy = y - r.y; return [c * dx + s * dy, -s * dx + c * dy]; });
+}
+function toWorld(pts, r) {
+  const c = Math.cos(r.th), s = Math.sin(r.th);
+  return pts.map(([x, y]) => [r.x + c * x - s * y, r.y + s * x + c * y]);
+}
+function snapshot() {
+  if (S.tab === 'draw') {
+    if (!S.draw.pts.length || !S.robot) return null;
+    return { kind: 'draw', points: toLocal(S.draw.pts, S.robot), smooth: S.draw.smooth, closed: S.draw.closed };
+  }
+  if (S.tab === 'steps') return S.steps.length ? { kind: 'steps', steps: structuredClone(S.steps), turnRadius: +$('turnRadius').value || 0 } : null;
+  if (S.tab === 'shape') return { kind: 'shape', shape: structuredClone(S.shape) };
+  return null;
+}
+let lastTab = 'draw';
+function renderSaved() {
+  const ul = $('savedList');
+  ul.innerHTML = '';
+  const list = loadSaved();
+  if (!list.length) {
+    const li = document.createElement('li');
+    li.innerHTML = '<div class="meta">Nenhuma rota salva ainda. Monte uma rota em outra aba, volte aqui e salve com um nome.</div>';
+    ul.append(li);
+    return;
+  }
+  const kindName = { draw: 'Desenho', steps: 'Por distância', shape: 'Forma' };
+  list.forEach((r, i) => {
+    const li = document.createElement('li');
+    const info = document.createElement('div');
+    info.innerHTML = `<div class="name"></div><div class="meta">${kindName[r.data.kind]}</div>`;
+    info.querySelector('.name').textContent = r.name;
+    const acts = document.createElement('div');
+    acts.className = 'row';
+    const load = document.createElement('button'); load.type = 'button'; load.className = 'btn small'; load.textContent = 'Carregar';
+    load.addEventListener('click', () => loadRoute(r.data));
+    const del = document.createElement('button'); del.type = 'button'; del.className = 'btn small'; del.textContent = 'Excluir';
+    del.addEventListener('click', () => { const l = loadSaved(); l.splice(i, 1); storeSaved(l); renderSaved(); });
+    acts.append(load, del);
+    li.append(info, acts);
+    ul.append(li);
+  });
+}
+function loadRoute(d) {
+  if (d.kind === 'draw') {
+    if (!S.robot) { say('Sem posição do robô para posicionar o desenho', true); return; }
+    S.draw.pts = toWorld(d.points, S.robot);
+    S.draw.smooth = !!d.smooth; S.draw.closed = !!d.closed;
+    $('drawSmooth').checked = S.draw.smooth; $('drawClosed').checked = S.draw.closed;
+    updateDrawInfo(); setTab('draw');
+  } else if (d.kind === 'steps') {
+    S.steps = structuredClone(d.steps); $('turnRadius').value = d.turnRadius || 0;
+    renderSteps(); setTab('steps');
+  } else if (d.kind === 'shape') {
+    S.shape = { ...S.shape, ...structuredClone(d.shape) };
+    renderShapes(); setTab('shape');
+  }
+  say('Rota carregada. Confira a prévia no mapa antes de executar.');
+}
+document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.tab !== 'saved') lastTab = b.dataset.tab;
+  if (b.dataset.tab === 'saved') renderSaved();
+}));
+$('saveBtn').addEventListener('click', () => {
+  const tabNow = S.tab;
+  S.tab = lastTab;
+  const snap = snapshot();
+  S.tab = tabNow;
+  const name = $('saveName').value.trim();
+  if (!snap) { say('Monte uma rota em Desenhar, Por distância ou Formas antes de salvar', true); return; }
+  if (!name) { say('Dê um nome para a rota', true); $('saveName').focus(); return; }
+  const list = loadSaved().filter((r) => r.name !== name);
+  list.unshift({ name, data: snap, saved: Date.now() });
+  storeSaved(list);
+  $('saveName').value = '';
+  renderSaved();
+  say(`Rota "${name}" salva.`);
+});
+$('exportBtn').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(loadSaved(), null, 2)], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'uancabot-rotas.json'; a.click();
+  URL.revokeObjectURL(a.href);
+});
+$('importFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const incoming = JSON.parse(await f.text());
+    if (!Array.isArray(incoming)) throw new Error();
+    const byName = new Map(loadSaved().map((r) => [r.name, r]));
+    incoming.forEach((r) => { if (r && r.name && r.data) byName.set(r.name, r); });
+    storeSaved([...byName.values()]);
+    renderSaved();
+    say(`${incoming.length} rota(s) importada(s).`);
+  } catch { say('Arquivo inválido: use um arquivo exportado por esta página', true); }
+  e.target.value = '';
+});
+
+// ───────── acoes ─────────
+$('execBtn').addEventListener('click', async () => {
+  const req = routeRequest();
+  if (!req) { say('Monte uma rota primeiro', true); return; }
+  try {
+    const out = await api('/api/execute', req);
+    S.preview = out.points;
+    say(`Rota enviada: ${fmt(out.length)} m.`);
+    if (S.tab === 'draw') { S.draw.pts = []; updateDrawInfo(); }
+  } catch (e) { say(e.message, true); }
+  draw();
+});
+$('abortBtn').addEventListener('click', async () => {
+  try { await api('/api/abort', {}); say('Rota cancelada.'); } catch (e) { say(e.message, true); }
+});
+async function stopNow() {
+  try { await api('/api/stop', {}); S.estop = true; renderStatus(); say('Parada de emergência ativada.'); }
+  catch (e) { say('Falha ao enviar PARAR: ' + e.message, true); }
+}
+$('estopBtn').addEventListener('click', stopNow);
+$('releaseBtn').addEventListener('click', async () => {
+  try { await api('/api/release', {}); S.estop = false; renderStatus(); say('Parada liberada.'); } catch (e) { say(e.message, true); }
+});
+$('resetBtn').addEventListener('click', async () => {
+  try { await api('/api/reset_odom', {}); S.view.fitted = false; say('Odometria zerada.'); schedulePreview(); } catch (e) { say(e.message, true); }
+});
+$('centerBtn').addEventListener('click', () => { if (S.robot) { S.view.cx = S.robot.x; S.view.cy = S.robot.y; draw(); } });
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement.tagName)) {
+    e.preventDefault(); stopNow();
+  }
+});
+
+// ───────── status ─────────
+function renderStatus() {
+  const st = $('status');
+  const s = S.status || 'idle';
+  st.className = 'status';
+  if (s === 'running') { st.textContent = 'Executando rota'; st.classList.add('running'); }
+  else if (s === 'done') { st.textContent = 'Rota concluída'; st.classList.add('done'); }
+  else if (s.startsWith('aborted')) {
+    const why = s.split(':').slice(1).join(':').trim();
+    st.textContent = 'Rota interrompida' + (why ? `: ${why}` : '');
+    st.classList.add('aborted');
+  } else st.textContent = 'Robô parado';
+  $('abortBtn').disabled = s !== 'running';
+  $('estopBanner').classList.toggle('on', S.estop);
+  $('execBtn').disabled = S.tab === 'saved' || S.estop;
+
+  const c = $('conn');
+  const live = S.robot && S.odomAge != null && S.odomAge < 1.0;
+  c.className = 'conn ' + (live ? 'live' : 'lost');
+  $('connText').textContent = live ? 'Robô conectado' : 'Sem sinal do robô';
+  if (S.robot) {
+    const deg = Math.round(S.robot.th * 180 / Math.PI);
+    $('pose').innerHTML = `x <b>${fmt(S.robot.x)}</b> m &nbsp; y <b>${fmt(S.robot.y)}</b> m &nbsp; θ <b>${deg}</b>°`;
+  }
+}
+
+let failCount = 0;
+async function poll() {
+  try {
+    const st = await api('/api/state');
+    failCount = 0;
+    S.robot = st.pose ? { x: st.pose[0], y: st.pose[1], th: st.pose[2] } : null;
+    S.odomAge = st.odom_age;
+    S.actual = st.actual || [];
+    S.planned = st.planned || [];
+    S.lookahead = st.lookahead;
+    const prev = S.status;
+    S.status = st.status;
+    S.estop = st.estop;
+    if (S.robot && !S.view.fitted) { S.view.cx = S.robot.x; S.view.cy = S.robot.y; S.view.fitted = true; schedulePreview(); }
+    if (prev === 'running' && S.status !== 'running') schedulePreview();
+  } catch {
+    failCount++;
+    if (failCount > 3) { S.odomAge = null; $('connText').textContent = 'Sem conexão com a Radxa'; }
+  }
+  renderStatus();
+  draw();
+  setTimeout(poll, 200);
+}
+
+// ───────── mapa (canvas) ─────────
+const cv = $('cv');
+const ctx = cv.getContext('2d');
+function resize() {
+  const r = cv.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(r.width * dpr);
+  cv.height = Math.round(r.height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+window.addEventListener('resize', resize);
+
+function W() { return cv.clientWidth; }
+function H() { return cv.clientHeight; }
+function toScreen(x, y) { return [W() / 2 + (x - S.view.cx) * S.view.scale, H() / 2 - (y - S.view.cy) * S.view.scale]; }
+function toWorldPt(px, py) { return [S.view.cx + (px - W() / 2) / S.view.scale, S.view.cy - (py - H() / 2) / S.view.scale]; }
+
+function css(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+const C = {};
+function loadColors() { for (const k of ['film', 'grid-minor', 'grid-major', 'ink', 'ink-soft', 'cobalt', 'graphite', 'stop', 'caution']) C[k] = css('--' + k); }
+
+function polyline(pts, color, width, dash = []) {
+  if (pts.length < 2) return;
+  ctx.save();
+  ctx.strokeStyle = color; ctx.lineWidth = width; ctx.setLineDash(dash);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => { const [sx, sy] = toScreen(x, y); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); });
+  ctx.stroke();
+  ctx.restore();
+}
+
+function niceStep(minPx) {
+  const steps = [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10];
+  return steps.find((s) => s * S.view.scale >= minPx) || 10;
+}
+
+function draw() {
+  if (!cv.width) return;
+  const w = W(), h = H();
+  ctx.fillStyle = C.film; ctx.fillRect(0, 0, w, h);
+
+  // grade
+  const [x0, y1] = toWorldPt(0, 0), [x1, y0] = toWorldPt(w, h);
+  const minor = S.view.scale >= 90 ? 0.1 : S.view.scale >= 30 ? 0.5 : 0;
+  const layers = minor ? [[minor, C['grid-minor']], [1, C['grid-major']]] : [[1, C['grid-major']]];
+  for (const [step, color] of layers) {
+    ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.beginPath();
+    for (let x = Math.ceil(x0 / step) * step; x <= x1; x += step) { const [sx] = toScreen(x, 0); ctx.moveTo(Math.round(sx) + 0.5, 0); ctx.lineTo(Math.round(sx) + 0.5, h); }
+    for (let y = Math.ceil(y0 / step) * step; y <= y1; y += step) { const [, sy] = toScreen(0, y); ctx.moveTo(0, Math.round(sy) + 0.5); ctx.lineTo(w, Math.round(sy) + 0.5); }
+    ctx.stroke();
+  }
+  // origem do odom
+  const [ox, oy] = toScreen(0, 0);
+  ctx.strokeStyle = C['ink-soft']; ctx.lineWidth = 1.5; ctx.beginPath();
+  ctx.moveTo(ox - 8, oy); ctx.lineTo(ox + 8, oy); ctx.moveTo(ox, oy - 8); ctx.lineTo(ox, oy + 8); ctx.stroke();
+
+  // escala
+  const sStep = niceStep(70);
+  $('scaleBar').style.width = `${sStep * S.view.scale}px`;
+  $('scaleText').textContent = sStep >= 1 ? `${String(sStep).replace('.', ',')} m` : `${Math.round(sStep * 100)} cm`;
+
+  // trajeto real, rota em execucao, previa
+  polyline(S.actual, C.graphite, 3);
+  if (S.status === 'running') polyline(S.planned, C.cobalt, 2.5, [8, 6]);
+  else if (S.preview.length) polyline(S.preview, C.cobalt, 3, [2, 6]);
+  else polyline(S.planned, 'rgba(43, 89, 195, 0.5)', 2.5, [8, 6]);
+
+  // desenho: pontos clicados
+  if (S.tab === 'draw' && S.draw.pts.length) {
+    S.draw.pts.forEach(([x, y], i) => {
+      const [sx, sy] = toScreen(x, y);
+      ctx.fillStyle = '#fff'; ctx.strokeStyle = C.cobalt; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(sx, sy, 9, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = C.cobalt; ctx.font = `600 12px ${css('--num')}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(i + 1), sx, sy + 0.5);
+    });
+  }
+
+  // alvo do seguidor
+  if (S.lookahead) {
+    const [lx, ly] = toScreen(S.lookahead[0], S.lookahead[1]);
+    ctx.strokeStyle = C.cobalt; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(lx, ly, 6, 0, Math.PI * 2); ctx.stroke();
+  }
+
+  // robo (pegada ~38 x 36 cm)
+  if (S.robot) {
+    const { x, y, th } = S.robot;
+    const [sx, sy] = toScreen(x, y);
+    const k = S.view.scale;
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate(-th);
+    const L = 0.38 * k, Wd = 0.36 * k;
+    ctx.fillStyle = 'rgba(29, 42, 56, 0.12)'; ctx.strokeStyle = C.ink; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.rect(-L * 0.45, -Wd / 2, L, Wd); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = C.ink;
+    const ww = 0.125 * k, wt = 0.035 * k;
+    ctx.fillRect(-ww / 2, -Wd / 2 - wt, ww, wt);
+    ctx.fillRect(-ww / 2, Wd / 2, ww, wt);
+    ctx.beginPath(); ctx.moveTo(L * 0.5, 0); ctx.lineTo(L * 0.18, -Wd * 0.22); ctx.lineTo(L * 0.18, Wd * 0.22); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+}
+
+// ───────── interacao com o mapa ─────────
+const pointers = new Map();
+let drag = null;   // {kind:'pan'|'point', ...}
+let pinch = null;
+
+function hitPoint(px, py) {
+  if (S.tab !== 'draw') return -1;
+  for (let i = S.draw.pts.length - 1; i >= 0; i--) {
+    const [sx, sy] = toScreen(...S.draw.pts[i]);
+    if (Math.hypot(px - sx, py - sy) <= 13) return i;
+  }
+  return -1;
+}
+function snapPt([x, y]) { return S.draw.snap ? [Math.round(x * 10) / 10, Math.round(y * 10) / 10] : [x, y]; }
+function local(e) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+
+cv.addEventListener('pointerdown', (e) => {
+  cv.setPointerCapture(e.pointerId);
+  const p = local(e);
+  pointers.set(e.pointerId, p);
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinch = { d: Math.hypot(a[0] - b[0], a[1] - b[1]), scale: S.view.scale };
+    drag = null;
+    return;
+  }
+  if (e.button === 2) return;
+  const hit = hitPoint(...p);
+  drag = hit >= 0
+    ? { kind: 'point', idx: hit, moved: false, start: p }
+    : { kind: 'pan', start: p, cx: S.view.cx, cy: S.view.cy, moved: false };
+});
+cv.addEventListener('pointermove', (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  const p = local(e);
+  pointers.set(e.pointerId, p);
+  if (pinch && pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    S.view.scale = Math.max(15, Math.min(600, pinch.scale * d / pinch.d));
+    draw();
+    return;
+  }
+  if (!drag) return;
+  const dx = p[0] - drag.start[0], dy = p[1] - drag.start[1];
+  if (Math.hypot(dx, dy) > 4) drag.moved = true;
+  if (drag.kind === 'pan' && drag.moved) {
+    S.view.cx = drag.cx - dx / S.view.scale;
+    S.view.cy = drag.cy + dy / S.view.scale;
+    draw();
+  } else if (drag.kind === 'point' && drag.moved) {
+    S.draw.pts[drag.idx] = snapPt(toWorldPt(...p));
+    draw();
+  }
+});
+function endPointer(e) {
+  const p = pointers.get(e.pointerId);
+  pointers.delete(e.pointerId);
+  if (pinch) { if (pointers.size < 2) pinch = null; drag = null; return; }
+  if (!drag) return;
+  if (drag.kind === 'point' && drag.moved) schedulePreview();
+  if (drag.kind === 'point' && !drag.moved && e.type === 'pointerup') {
+    S.draw.pts.splice(drag.idx, 1); updateDrawInfo(); schedulePreview(); draw();
+  }
+  if (drag.kind === 'pan' && !drag.moved && S.tab === 'draw' && e.type === 'pointerup' && p) {
+    S.draw.pts.push(snapPt(toWorldPt(...p)));
+    updateDrawInfo(); schedulePreview(); draw();
+  }
+  drag = null;
+}
+cv.addEventListener('pointerup', endPointer);
+cv.addEventListener('pointercancel', endPointer);
+cv.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  const i = hitPoint(...local(e));
+  if (i >= 0) { S.draw.pts.splice(i, 1); updateDrawInfo(); schedulePreview(); draw(); }
+});
+cv.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const p = local(e);
+  const before = toWorldPt(...p);
+  S.view.scale = Math.max(15, Math.min(600, S.view.scale * Math.exp(-e.deltaY * 0.0015)));
+  const after = toWorldPt(...p);
+  S.view.cx += before[0] - after[0];
+  S.view.cy += before[1] - after[1];
+  draw();
+}, { passive: false });
+
+// ───────── inicio ─────────
+loadColors();
+renderSteps();
+renderShapes();
+updateDrawInfo();
+setTab('draw');
+resize();
+document.fonts?.ready.then(draw);
+poll();
+</script>
+</body>
+</html>

@@ -1,29 +1,42 @@
 #!/usr/bin/env python3
 """
-UancaBot Path Generator Node (ROS2 Jazzy)
+UancaBot Path Generator (ROS2 Jazzy)
 
-Gera trajetorias geometricas prontas (reta, quadrado, circulo, figura 8,
-slalom) e publica como nav_msgs/Path em /planned_path -- para comparar
-visualmente com /actual_path no Foxglove e calibrar odometria/controle.
+Gera rotas e manda pro path_follower. Tres jeitos de criar uma rota:
 
-Uso (via topico):
-  ros2 topic pub --once /uancabot/generate_path std_msgs/String \
-    'data: "{\"shape\": \"circle\", \"radius_m\": 0.5}"'
+1) FORMAS PRONTAS e ROTAS POR DISTANCIA  -> /uancabot/generate_path (std_msgs/String, JSON)
+   A rota e relativa ao robo: comeca onde ele esta, olhando pra frente.
+   Exemplos:
+     {"shape": "line", "length_m": 1.0}
+     {"shape": "square", "side_m": 1.0}
+     {"shape": "rectangle", "width_m": 1.2, "height_m": 0.6, "corner_radius_m": 0.2}
+     {"shape": "circle", "radius_m": 0.5, "direction": "left"}
+     {"shape": "arc", "radius_m": 0.6, "angle_deg": 90}
+     {"shape": "figure8", "radius_m": 0.4}
+     {"shape": "slalom", "length_m": 2.0, "amplitude_m": 0.25, "wavelength_m": 1.0}
+     {"shape": "segments", "segments": [{"forward": 1.0}, {"turn": 90}, {"forward": 0.5}]}
+     {"shape": "polyline", "points": [[0.8, 0], [0.8, 0.6]], "smooth": false, "closed": false}
+   Sem "execute": so mostra a previa em /planned_path (robo NAO se move).
+   Com "execute": true, ja manda executar.
 
-Formas suportadas e parametros (tudo em metros, angulos internos):
-  line:     {"shape": "line", "length_m": 1.0}
-  square:   {"shape": "square", "side_m": 1.0}
-  circle:   {"shape": "circle", "radius_m": 0.5}
-  figure8:  {"shape": "figure8", "radius_m": 0.5}
-  slalom:   {"shape": "slalom", "length_m": 2.0, "amplitude_m": 0.3, "wavelength_m": 0.5}
+2) EXECUTAR A PREVIA -> /uancabot/execute_preview (std_msgs/Empty)
+   Executa a ultima previa gerada, re-ancorada na pose atual do robo.
 
-Parametro comum opcional: "spacing_m" (default 0.05 = 5cm) -- espacamento
-entre pontos gerados ao longo do caminho.
+3) DESENHO PONTO A PONTO no painel 3D do Foxglove
+   Cada clique com a ferramenta "Publish point" chega em /clicked_point e
+   vira um ponto da rota (posicao absoluta no chao, frame odom). A rota
+   sempre comeca na posicao atual do robo. Previa em /uancabot/draft_path.
+   Comandos em /uancabot/draft_cmd (std_msgs/String):
+     "undo"     remove o ultimo ponto
+     "clear"    apaga o desenho
+     "smooth"   liga/desliga suavizacao (curvas) -- desligado = cantos com pivo
+     "close"    liga/desliga voltar ao ponto de partida no final
+     "execute"  manda o desenho pro robo seguir
 
-Parametro opcional "execute": true -- alem de publicar /planned_path,
-tambem envia os waypoints [x,y] pro path_executor existente via
-/uancabot/execute_path, fazendo o robo seguir de verdade. Default false
-(so gera e visualiza, NAO move o robo) -- opt-in explicito por seguranca.
+Saidas:
+  /planned_path          rota que sera/esta sendo executada (frame odom)
+  /uancabot/draft_path   previa do desenho em andamento (frame odom)
+  /uancabot/follow_path  rota enviada pro path_follower (frame odom)
 """
 
 import json
@@ -32,180 +45,184 @@ import math
 import rclpy
 from rclpy.node import Node
 
-from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped
-from nav_msgs.msg import Path
+from std_msgs.msg import String, Empty
+from geometry_msgs.msg import PoseStamped, PointStamped
+from nav_msgs.msg import Path, Odometry
+
+from uancabot_odometry.path_tools import (
+    build_shape, resample, to_frame, headings, chaikin, dedupe, path_length,
+)
 
 
-def make_pose(x, y, heading_rad, frame_id="odom"):
-    pose = PoseStamped()
-    pose.header.frame_id = frame_id
-    pose.pose.position.x = x
-    pose.pose.position.y = y
-    pose.pose.position.z = 0.0
-    pose.pose.orientation.z = math.sin(heading_rad / 2.0)
-    pose.pose.orientation.w = math.cos(heading_rad / 2.0)
-    return pose
-
-
-def gen_line(length_m, spacing_m):
-    n = max(2, round(length_m / spacing_m)) + 1
-    pts = []
-    for i in range(n):
-        x = length_m * i / (n - 1)
-        pts.append((x, 0.0, 0.0))
-    return pts
-
-
-def gen_square(side_m, spacing_m):
-    """Quadrado CCW comecando em (0,0), heading 0 (olhando +x)."""
-    pts = []
-    headings = [0.0, math.pi / 2, math.pi, 3 * math.pi / 2]
-    starts = [(0.0, 0.0), (side_m, 0.0), (side_m, side_m), (0.0, side_m)]
-    n_side = max(2, round(side_m / spacing_m))
-    for side_idx in range(4):
-        sx, sy = starts[side_idx]
-        heading = headings[side_idx]
-        dx = math.cos(heading)
-        dy = math.sin(heading)
-        for i in range(n_side):
-            t = side_m * i / n_side
-            pts.append((sx + dx * t, sy + dy * t, heading))
-    pts.append((0.0, 0.0, 0.0))
-    return pts
-
-
-def gen_circle(radius_m, spacing_m):
-    circumference = 2 * math.pi * radius_m
-    n = max(8, round(circumference / spacing_m))
-    pts = []
-    for i in range(n + 1):
-        s = circumference * i / n
-        angle = s / radius_m
-        x = radius_m * math.sin(angle)
-        y = radius_m * (1 - math.cos(angle))
-        pts.append((x, y, angle))
-    return pts
-
-
-def gen_figure8(radius_m, spacing_m):
-    circumference = 2 * math.pi * radius_m
-    n = max(8, round(circumference / spacing_m))
-    pts = []
-    for i in range(n + 1):
-        s = circumference * i / n
-        angle = s / radius_m
-        x = radius_m * math.sin(angle)
-        y = radius_m * (1 - math.cos(angle))
-        pts.append((x, y, angle))
-    for i in range(1, n + 1):
-        s = circumference * i / n
-        angle = s / radius_m
-        x = radius_m * math.sin(angle)
-        y = -radius_m * (1 - math.cos(angle))
-        pts.append((x, y, -angle))
-    return pts
-
-
-def gen_slalom(length_m, amplitude_m, wavelength_m, spacing_m):
-    n = max(8, round(length_m / spacing_m)) + 1
-    pts = []
-    for i in range(n):
-        x = length_m * i / (n - 1)
-        y = amplitude_m * math.sin(2 * math.pi * x / wavelength_m)
-        dydx = amplitude_m * (2 * math.pi / wavelength_m) * math.cos(2 * math.pi * x / wavelength_m)
-        heading = math.atan2(dydx, 1.0)
-        pts.append((x, y, heading))
-    return pts
-
-
-class PathGeneratorNode(Node):
+class PathGenerator(Node):
     def __init__(self):
         super().__init__('uancabot_path_generator')
+        self.declare_parameter('spacing_m', 0.05)
+        self.declare_parameter('corner_deg', 35.0)
+        self.spacing = float(self.get_parameter('spacing_m').value)
+        self.corner_deg = float(self.get_parameter('corner_deg').value)
 
-        self.declare_parameter('default_spacing_m', 0.05)
-        self.default_spacing_m = self.get_parameter('default_spacing_m').value
+        self.pose = None              # (x, y, theta) do /odom
+        self.preview_local = None     # ultima forma gerada, relativa ao robo
+        self.preview_name = ''
+        self.draft = []               # pontos clicados, frame odom
+        self.draft_smooth = False
+        self.draft_closed = False
+        self.warned_frames = set()
 
-        self.planned_path_pub = self.create_publisher(Path, '/planned_path', 10)
-        self.execute_pub = self.create_publisher(String, '/uancabot/execute_path', 10)
+        self.planned_pub = self.create_publisher(Path, '/planned_path', 10)
+        self.draft_pub = self.create_publisher(Path, '/uancabot/draft_path', 10)
+        self.follow_pub = self.create_publisher(Path, '/uancabot/follow_path', 10)
 
-        self.gen_sub = self.create_subscription(
-            String, '/uancabot/generate_path', self.generate_callback, 10
-        )
+        self.create_subscription(Odometry, '/odom', self.odom_cb, 10)
+        self.create_subscription(String, '/uancabot/generate_path', self.generate_cb, 10)
+        self.create_subscription(Empty, '/uancabot/execute_preview', self.execute_preview_cb, 10)
+        self.create_subscription(PointStamped, '/clicked_point', self.clicked_cb, 10)
+        self.create_subscription(String, '/uancabot/draft_cmd', self.draft_cmd_cb, 10)
+        self.create_timer(0.5, self.publish_draft)
 
-        self.get_logger().info("Path generator pronto.")
-        self.get_logger().info(
-            "Formas: line, square, circle, figure8, slalom."
-        )
-        self.get_logger().info(
-            'Acrescente "execute": true no JSON pra tambem mandar o robo seguir '
-            "(default false -- so gera e visualiza, nao move o robo)."
-        )
+        self.get_logger().info('Path generator pronto.')
+        self.get_logger().info('  Formas: line, arc, circle, square, rectangle, figure8, slalom, '
+                               'segments, polyline')
+        self.get_logger().info('  Desenho: clique pontos no painel 3D (Publish point) e use '
+                               '/uancabot/draft_cmd (undo, clear, smooth, close, execute)')
 
-    def generate_callback(self, msg):
+    # ───────── utilitarios ─────────
+
+    def make_path(self, pts):
+        msg = Path()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'odom'
+        for (x, y), h in zip(pts, headings(pts)):
+            ps = PoseStamped()
+            ps.header = msg.header
+            ps.pose.position.x = x
+            ps.pose.position.y = y
+            ps.pose.orientation.z = math.sin(h / 2.0)
+            ps.pose.orientation.w = math.cos(h / 2.0)
+            msg.poses.append(ps)
+        return msg
+
+    def need_pose(self):
+        if self.pose is None:
+            self.get_logger().error('Ainda nao recebi /odom -- o motor_bridge esta rodando?')
+            return False
+        return True
+
+    def send_to_follower(self, pts_odom, name):
+        msg = self.make_path(pts_odom)
+        self.planned_pub.publish(msg)
+        self.follow_pub.publish(msg)
+        self.get_logger().info(f'[EXEC] "{name}" enviado pro seguidor: {len(pts_odom)} pontos, '
+                               f'{path_length(pts_odom):.2f} m')
+
+    # ───────── callbacks ─────────
+
+    def odom_cb(self, msg):
+        q = msg.pose.pose.orientation
+        th = 2.0 * math.atan2(q.z, q.w)
+        self.pose = (msg.pose.pose.position.x, msg.pose.pose.position.y, th)
+
+    def generate_cb(self, msg):
         try:
             spec = json.loads(msg.data)
+            if not isinstance(spec, dict):
+                raise ValueError('o JSON precisa ser um objeto {...}')
+            local = resample(build_shape(spec), float(spec.get('spacing_m', self.spacing)),
+                             self.corner_deg)
         except Exception as e:
-            self.get_logger().error(f"[PATH_GEN] JSON invalido: {e}")
+            self.get_logger().error(f'[GEN] Rota invalida: {e}')
             return
-
-        shape = spec.get('shape')
-        spacing = spec.get('spacing_m', self.default_spacing_m)
-
-        try:
-            if shape == 'line':
-                pts = gen_line(spec['length_m'], spacing)
-            elif shape == 'square':
-                pts = gen_square(spec['side_m'], spacing)
-            elif shape == 'circle':
-                pts = gen_circle(spec['radius_m'], spacing)
-            elif shape == 'figure8':
-                pts = gen_figure8(spec['radius_m'], spacing)
-            elif shape == 'slalom':
-                pts = gen_slalom(
-                    spec['length_m'], spec['amplitude_m'], spec['wavelength_m'], spacing
-                )
-            else:
-                self.get_logger().error(
-                    f"[PATH_GEN] Forma desconhecida: {shape!r}. "
-                    "Use: line, square, circle, figure8, slalom."
-                )
-                return
-        except KeyError as e:
-            self.get_logger().error(f"[PATH_GEN] Parametro obrigatorio faltando: {e}")
+        if not self.need_pose():
             return
-
-        now = self.get_clock().now()
-        path_msg = Path()
-        path_msg.header.stamp = now.to_msg()
-        path_msg.header.frame_id = "odom"
-        path_msg.poses = [make_pose(x, y, h) for (x, y, h) in pts]
-        for pose in path_msg.poses:
-            pose.header.stamp = now.to_msg()
-
-        self.planned_path_pub.publish(path_msg)
-        self.get_logger().info(
-            f"[PATH_GEN] '{shape}' gerado: {len(pts)} pontos publicados em /planned_path"
-        )
-
+        self.preview_local = local
+        self.preview_name = str(spec.get('shape'))
+        self.planned_pub.publish(self.make_path(to_frame(local, *self.pose)))
+        self.get_logger().info(f'[GEN] Previa "{self.preview_name}": {len(local)} pontos, '
+                               f'{path_length(local):.2f} m (robo parado)')
         if spec.get('execute', False):
-            waypoints = [[round(x, 4), round(y, 4)] for (x, y, h) in pts]
-            self.execute_pub.publish(String(data=json.dumps(waypoints)))
-            self.get_logger().info(
-                f"[PATH_GEN] Tambem enviado pro path_executor ({len(waypoints)} waypoints)"
-            )
+            self.execute_preview_cb(None)
+
+    def execute_preview_cb(self, _msg):
+        if self.preview_local is None:
+            self.get_logger().warn('[EXEC] Nenhuma previa gerada ainda')
+            return
+        if not self.need_pose():
+            return
+        self.send_to_follower(to_frame(self.preview_local, *self.pose), self.preview_name)
+
+    def clicked_cb(self, msg):
+        frame = msg.header.frame_id
+        x, y = msg.point.x, msg.point.y
+        if frame == 'base_link':
+            if not self.need_pose():
+                return
+            x, y = to_frame([(x, y)], *self.pose)[0]
+        elif frame not in ('odom', '') and frame not in self.warned_frames:
+            self.warned_frames.add(frame)
+            self.get_logger().warn(f'[DRAW] Ponto no frame "{frame}", tratando como odom. '
+                                   'Use Display frame = odom no painel 3D.')
+        self.draft.append((x, y))
+        self.get_logger().info(f'[DRAW] Ponto {len(self.draft)}: ({x:.2f}, {y:.2f})')
+        self.publish_draft()
+
+    def draft_points(self):
+        if self.pose is None or not self.draft:
+            return []
+        start = (self.pose[0], self.pose[1])
+        pts = [start] + self.draft
+        if self.draft_closed:
+            pts.append(start)
+        pts = dedupe(pts)
+        if len(pts) < 2:
+            return []
+        if self.draft_smooth:
+            pts = chaikin(pts)
+        return resample(pts, self.spacing, self.corner_deg)
+
+    def publish_draft(self):
+        self.draft_pub.publish(self.make_path(self.draft_points()))
+
+    def draft_cmd_cb(self, msg):
+        cmd = msg.data.strip().lower()
+        if cmd == 'undo':
+            if self.draft:
+                self.draft.pop()
+            self.get_logger().info(f'[DRAW] Desfeito ({len(self.draft)} pontos)')
+        elif cmd == 'clear':
+            self.draft = []
+            self.get_logger().info('[DRAW] Desenho apagado')
+        elif cmd == 'smooth':
+            self.draft_smooth = not self.draft_smooth
+            self.get_logger().info(f'[DRAW] Suavizacao {"LIGADA" if self.draft_smooth else "DESLIGADA"}')
+        elif cmd == 'close':
+            self.draft_closed = not self.draft_closed
+            self.get_logger().info(f'[DRAW] Voltar ao inicio {"LIGADO" if self.draft_closed else "DESLIGADO"}')
+        elif cmd == 'execute':
+            pts = self.draft_points()
+            if len(pts) < 2:
+                self.get_logger().warn('[DRAW] Desenho vazio: clique pelo menos 1 ponto')
+                return
+            self.send_to_follower(pts, 'desenho')
+            self.draft = []
+        else:
+            self.get_logger().warn(f'[DRAW] Comando desconhecido: "{cmd}" '
+                                   '(use undo, clear, smooth, close, execute)')
+            return
+        self.publish_draft()
 
 
 def main(args=None):
     rclpy.init(args=args)
-    node = PathGeneratorNode()
+    node = PathGenerator()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
